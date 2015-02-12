@@ -1,0 +1,80 @@
+#This program is designed to take a csv file from the publicly available database of traffic related incidents in San Francisco (see https://data.sfgov.org/Service-Requests-311-/Case-Data-from-San-Francisco-311/vw6y-z8j6) and record the time that each case remained open before being resolved. This was meant as an exercise in file io (for larger file sizes), which required some delving into chunking to avoid memory overflows, and also in pandas, a nice library for Python that mimics many of the convenient features of the R language.
+
+#usage: python [-c] chunksize timeopen.py dataset outfile
+#chunksize is an integer specifying the number of lines to read at a time from the file
+#dataset is a .csv file
+#outfile is typically a .csv file
+
+from optparse import OptionParser
+import sys
+import pandas as pd
+import numpy as np
+import re
+from datetime import datetime
+
+dateregex = r"(0[1-9]|1[012])[/](0[1-9]|[12][0-9]|3[01])[/](19\d\d|20\d\d) (0[1-9]|1[0-2])(:)([0-5][0-9]) (AM|PM)"
+DATE_P = re.compile(dateregex)
+date_format = '%m/%d/%Y %I:%M %p'
+Y, m, d, I, M, P = (3,1,2,4,6,7)
+
+def main():
+	r"""
+	DESCRIPTION
+	--------------
+	This python routine loads a given 311.csv file, adds a column which lists the time difference between opening and closing of each case, and then saves the updated data to given output file path. If no output file path is given, the result is printed to stdout.
+	"""
+	
+	usage = "usage: %prog [-c] chunksize dataset outfile"
+	usage += '\n'+main.__doc__
+	parser = OptionParser(usage=usage)
+	parser.add_option(
+      "-c", "--chunksize",
+      help="Load c lines at a time [default: %chunksize]",
+      action="store", dest='chunksize', type=int, default=10000)
+	parser.add_option(
+	  "-d", "--debug", help="Print out when each chunk is finished processing", action="store_true", dest="debug", default=False) 
+	(options, args) = parser.parse_args()
+	
+	assert options.chunksize > 0
+	assert len(args) <= 2 and len(args) >= 1
+  	infilename = args[0]
+  	infile = pd.read_csv(infilename, sep=",", iterator=True, dtype=str, chunksize = options.chunksize)
+	
+	outfilename = args[1] if len(args)==2 else sys.stdout
+	is_first_chunk = True
+	
+	for chunk in infile:
+		subchunk = chunk.ix[:,1:3]
+		timediff = []
+		for j in range(subchunk.shape[0]):
+			timediff.append(get_timediff(subchunk.ix[j,0], subchunk.ix[j,1]))
+		
+		chunk['TimeOpen'] = timediff
+		if is_first_chunk:
+			chunk.to_csv(outfilename, mode='a', header=True, index=False)
+			is_first_chunk = False
+		else:
+			chunk.to_csv(outfilename, mode='a', header=False, index=False)
+		if options.debug:
+			print "Finished processing chunk"
+  		
+def get_timediff(date1, date2):
+	if not isinstance(date1, str) & isinstance(date2, str):
+		return np.nan
+		
+	match1 = re.search(DATE_P, date1)
+	if match1:
+		d1 = datetime.strptime(match1.group(0), date_format)
+	else:
+		return np.nan
+	
+	match2 = re.search(DATE_P, date2)
+	if match2:
+		d2 = datetime.strptime(match2.group(0), date_format)
+		delta_t = d2 - d1
+		return delta_t.days*24*60 + delta_t.seconds/60
+	else:
+		return np.nan
+		
+if __name__ == '__main__':
+  main()
